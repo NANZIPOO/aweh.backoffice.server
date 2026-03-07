@@ -42,8 +42,8 @@ WORKDIR /app
 COPY --from=builder /build/gateway .
 COPY --from=builder /build/version.json . 
 
-# Copy migrations if they exist
-COPY --from=builder /build/migrations ./migrations 2>/dev/null || true
+# Copy migrations
+COPY --from=builder /build/migrations ./migrations
 
 # Set ownership
 RUN chown -R aweh:aweh /app
