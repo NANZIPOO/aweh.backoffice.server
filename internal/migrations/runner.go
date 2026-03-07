@@ -159,7 +159,7 @@ func applyMigration(db *sql.DB, filePath, fileName string) error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	sqlContent := string(sqlBytes)
+	sqlContent := stripSQLComments(string(sqlBytes))
 
 	// Start a transaction
 	tx, err := db.Begin()
@@ -199,6 +199,37 @@ func applyMigration(db *sql.DB, filePath, fileName string) error {
 	}
 
 	return nil
+}
+
+// stripSQLComments removes single-line SQL comments so comment-only blocks
+// are not sent to Firebird as executable statements.
+func stripSQLComments(sqlContent string) string {
+	lines := strings.Split(sqlContent, "\n")
+	var cleaned []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		// Skip full-line comments
+		if strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+
+		// Strip inline comment suffix, if present
+		if idx := strings.Index(line, "--"); idx >= 0 {
+			line = line[:idx]
+		}
+
+		line = strings.TrimSpace(line)
+		if line != "" {
+			cleaned = append(cleaned, line)
+		}
+	}
+
+	return strings.Join(cleaned, "\n")
 }
 
 // getMigrationsDir locates the migrations folder.
