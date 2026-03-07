@@ -117,29 +117,34 @@ All configuration is driven by **environment variables**. If a variable is not s
 
 | Env Var | Default | Description |
 |---|---|---|
-| `DB_HOST` | `localhost` | Firebird server hostname |
+| `DB_HOST` | `localhost` | Firebird server hostname or IP |
 | `DB_PORT` | `3050` | Firebird **3.0** instance port (**not** 3055 which is FB5) |
-| `DB_PATH` | `c:/Users/herna/aweh.pos/dinem.fdb` | Absolute path to the `.fdb` file |
+| `DB_PATH` | `c:/Users/herna/aweh.pos/dinem.fdb` | Absolute path to the `.fdb` file on the Firebird server |
 | `DB_USER` | `SYSDBA` | Firebird superuser |
 | `DB_PASS` | `profes` | SYSDBA password for this installation |
+| `AUTH_PLUGIN` | `Srp256` | Authentication method: `Srp256` (modern) or `Legacy_Auth` (older servers) |
+| `WIRE_CRYPT` | `true` | Wire encryption: `true` (encrypted connection) or `false` (unencrypted) |
 | `JWT_SECRET` | `your-secret-key` | HS256 signing secret — **change in production** |
-| `PORT` | `8081` | HTTP listen port (`8080` is permanently occupied by `svchost` on this machine) |
+| `PORT` | `8081` | HTTP listen port for the gateway |
+| `AUTO_MIGRATE` | `false` | Auto-apply migrations on startup: `true` or `false` |
 
 ### FirebirdDSN
 
-The DSN is constructed as:
+The DSN is constructed dynamically from environment variables:
 
 ```
-SYSDBA:profes@localhost:3050/c:/Users/herna/aweh.pos/dinem.fdb?auth_plugin_name=Legacy_Auth&wire_crypt=false
+SYSDBA:profes@192.168.0.152:3050/var/lib/firebird/3.0/data/aweh_test/dinem.fdb?auth_plugin_name=Srp256&wire_crypt=true
 ```
 
-The `auth_plugin_name=Legacy_Auth&wire_crypt=false` query params are **mandatory**. The Firebird 3.0 instance here uses `Legacy_UserManager`, meaning SYSDBA only has a legacy password hash (not an SRP hash). The `nakagami/firebirdsql` driver defaults to SRP negotiation which produces `op_response:92` (auth mismatch). Forcing `Legacy_Auth` fixes this permanently.
+**Authentication Options:**
+- `auth_plugin_name=Srp256` — Modern SRP-based authentication (Firebird 3.0+ with SRP enabled)
+- `auth_plugin_name=Legacy_Auth` — Legacy password hash authentication (older Firebird installations or custom configs)
 
-> **Two Firebird instances on this machine:**
-> - Port `3050` → **Firebird 3.0** (legacy `dinem.fdb` — this is what the gateway uses)
-> - Port `3055` → **Firebird 5.0** (separate instance — do not target for this app)
+**Wire Encryption:**
+- `wire_crypt=true` — Encrypted connection (recommended for production)
+- `wire_crypt=false` — Unencrypted connection (dev/testing only)
 
-> **Port 8080 is permanently occupied by a Windows system service (`svchost`) on this machine.** The gateway runs on `8081`. `freePort` is aware and will never kill `svchost`.
+Set these via environment variables (`AUTH_PLUGIN`, `WIRE_CRYPT`) to match your Firebird server's configuration.
 
 ---
 
