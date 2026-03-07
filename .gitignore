@@ -1,0 +1,44 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+main.exe
+pos-gateway*
+test-build*
+
+# Test files (don't commit to production)
+test_*.go
+tmp_*.go
+*_test.go
+
+# Go build artifacts
+*.test
+*.out
+
+# Dependency
+directories
+/vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment & secrets
+.env
+.env.local
+*.local
+
+# Database files
+*.fdb
+*.FDB
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

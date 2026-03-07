@@ -1,0 +1,41 @@
+# Git files
+.git
+.gitignore
+
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+pos-gateway.exe~
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Test files
+*_test.go
+test_*.go
+tmp_*.go
+
+# Documentation
+*.md
+!README.md
+
+# Environment files
+.env
+.env.local
+*.local
+
+# Database files
+*.fdb
+*.FDB
+
+# Logs
+*.log
