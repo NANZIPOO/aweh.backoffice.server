@@ -87,36 +87,52 @@ func RunMigrations(db *sql.DB, shouldMigrate bool) error {
 // createMigrationsTable creates the tracking table for migrations if it doesn't exist.
 // Uses Firebird syntax with GEN_ID for auto-increment.
 func createMigrationsTable(db *sql.DB) error {
-	createTableSQL := `
-		CREATE TABLE IF NOT EXISTS RDB$MIGRATIONS (
-			ID INTEGER PRIMARY KEY,
-			NAME VARCHAR(255) NOT NULL UNIQUE,
-			APPLIED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			STATUS VARCHAR(50) DEFAULT 'APPLIED'
-		)
-	`
-
-	// For Firebird, we need a generator
-	setGeneratorSQL := `
-		CREATE GENERATOR IF NOT EXISTS GEN_RDB_MIGRATIONS_ID
-	`
-
-	// Try to create the generator first (it might already exist, so we ignore errors)
-	_, _ = db.Exec(setGeneratorSQL)
-
-	// Now create the table
-	_, err := db.Exec(createTableSQL)
+	// Firebird doesn't support IF NOT EXISTS for CREATE TABLE/GENERATOR,
+	// so we must probe metadata first.
+	var tableCount int
+	err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM RDB$RELATIONS
+		WHERE RDB$RELATION_NAME = 'RDB$MIGRATIONS'
+	`).Scan(&tableCount)
 	if err != nil {
-		// Firebird may throw an error if table already exists
-		// Check if it's an "already exists" error and ignore it
-		if strings.Contains(err.Error(), "already exists") {
-			log.Println("migrations: RDB$MIGRATIONS table already exists")
-			return nil
-		}
-		return err
+		return fmt.Errorf("failed to query relation metadata: %w", err)
 	}
 
-	log.Println("migrations: RDB$MIGRATIONS tracking table created")
+	if tableCount == 0 {
+		createTableSQL := `
+			CREATE TABLE RDB$MIGRATIONS (
+				ID INTEGER PRIMARY KEY,
+				NAME VARCHAR(255) NOT NULL UNIQUE,
+				APPLIED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				STATUS VARCHAR(50) DEFAULT 'APPLIED'
+			)
+		`
+		if _, err := db.Exec(createTableSQL); err != nil {
+			return fmt.Errorf("failed to create RDB$MIGRATIONS table: %w", err)
+		}
+		log.Println("migrations: RDB$MIGRATIONS tracking table created")
+	} else {
+		log.Println("migrations: RDB$MIGRATIONS table already exists")
+	}
+
+	var generatorCount int
+	err = db.QueryRow(`
+		SELECT COUNT(*)
+		FROM RDB$GENERATORS
+		WHERE RDB$GENERATOR_NAME = 'GEN_RDB_MIGRATIONS_ID'
+	`).Scan(&generatorCount)
+	if err != nil {
+		return fmt.Errorf("failed to query generator metadata: %w", err)
+	}
+
+	if generatorCount == 0 {
+		if _, err := db.Exec("CREATE GENERATOR GEN_RDB_MIGRATIONS_ID"); err != nil {
+			return fmt.Errorf("failed to create GEN_RDB_MIGRATIONS_ID: %w", err)
+		}
+		log.Println("migrations: GEN_RDB_MIGRATIONS_ID created")
+	}
+
 	return nil
 }
 
