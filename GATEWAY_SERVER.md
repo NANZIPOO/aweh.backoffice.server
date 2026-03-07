@@ -158,8 +158,15 @@ Gateway serves release binaries from:
 
 Example:
 
-- `http://192.168.0.142:8081/downloads/aweh-backoffice-v1.0.0.apk`
-- `http://192.168.0.142:8081/downloads/aweh-backoffice-v1.0.0.exe`
+- `http://192.168.0.142:8081/downloads/aweh-backoffice-v1.0.0+1.apk`
+- `http://192.168.0.142:8081/downloads/aweh-backoffice-v1.0.0+1.exe`
+
+CLI verification (safe when filename contains `+`):
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:8081/downloads/aweh-backoffice-v1.0.0%2B1.apk"
+curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:8081/downloads/aweh-backoffice-v1.0.0%2B1.exe"
+```
 
 Docker deployment maps host folder to container:
 
@@ -199,6 +206,15 @@ AUTO_MIGRATE=false    # Skip migrations (manual application)
 **Safe defaults:**
 - **Development**: Set `AUTO_MIGRATE=true` to automatically seed new tables and schema changes.
 - **Production**: Set `AUTO_MIGRATE=false` (default). Review and apply migrations manually via other tools.
+
+### Important Runtime Behavior
+
+If you change `.env`, use recreate flow. `docker compose restart` does not reload environment values.
+
+```bash
+docker compose -f docker-compose.yml down
+docker compose -f docker-compose.yml up -d --build --force-recreate
+```
 
 ### Adding New Migrations
 
