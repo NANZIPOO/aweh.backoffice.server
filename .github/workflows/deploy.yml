@@ -1,0 +1,29 @@
+name: Deploy Gateway to Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            cd ~/aweh.backoffice.server
+            git pull origin main
+            docker compose down
+            docker compose up -d
+            sleep 5
+            docker compose logs --tail=20 gateway
+
+      - name: Verify deployment
+        run: curl -s http://100.100.206.41:8081/api/v1/version | head -c 50
