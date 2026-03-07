@@ -179,6 +179,10 @@ func applyMigration(db *sql.DB, filePath, fileName string) error {
 
 		_, err := tx.Exec(stmt)
 		if err != nil {
+			if isIgnorableDDLConflict(err, stmt) {
+				log.Printf("migrations: skipping already-applied DDL in %s\nStatement: %s\nReason: %v\n", fileName, stmt, err)
+				continue
+			}
 			return fmt.Errorf("failed to execute statement in %s: %w\nSQL: %s", fileName, err, stmt)
 		}
 	}
@@ -230,6 +234,50 @@ func stripSQLComments(sqlContent string) string {
 	}
 
 	return strings.Join(cleaned, "\n")
+}
+
+// isIgnorableDDLConflict determines whether a migration DDL error can be
+// safely ignored because the schema object already exists.
+func isIgnorableDDLConflict(err error, stmt string) bool {
+	if err == nil {
+		return false
+	}
+
+	errText := strings.ToLower(err.Error())
+	stmtText := strings.ToLower(strings.TrimSpace(stmt))
+
+	isDDL := strings.HasPrefix(stmtText, "alter table") ||
+		strings.HasPrefix(stmtText, "create index") ||
+		strings.HasPrefix(stmtText, "create generator") ||
+		strings.HasPrefix(stmtText, "create table")
+
+	if !isDDL {
+		return false
+	}
+
+	if strings.Contains(errText, "already exists") {
+		return true
+	}
+
+	if strings.Contains(errText, "attempt to store duplicate value") {
+		return true
+	}
+
+	if strings.Contains(errText, "violation of primary or unique key constraint") &&
+		(strings.Contains(errText, "rdb$relation_fields") ||
+			strings.Contains(errText, "rdb$relation_constraints") ||
+			strings.Contains(errText, "rdb$indices")) {
+		return true
+	}
+
+	if strings.Contains(errText, "unsuccessful metadata update") &&
+		(strings.Contains(errText, "rdb$relation_fields") ||
+			strings.Contains(errText, "rdb$relation_constraints") ||
+			strings.Contains(errText, "rdb$indices")) {
+		return true
+	}
+
+	return false
 }
 
 // getMigrationsDir locates the migrations folder.
