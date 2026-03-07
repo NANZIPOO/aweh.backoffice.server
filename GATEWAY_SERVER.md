@@ -127,6 +127,8 @@ All configuration is driven by **environment variables**. If a variable is not s
 | `JWT_SECRET` | `your-secret-key` | HS256 signing secret — **change in production** |
 | `PORT` | `8081` | HTTP listen port for the gateway |
 | `AUTO_MIGRATE` | `false` | Auto-apply migrations on startup: `true` or `false` |
+| `DOWNLOADS_DIR` | `/app/downloads` | Directory served as static files under `/downloads/*` |
+| `DOWNLOAD_BASE_URL` | `http://localhost:8081/downloads` | Base URL used in `/api/v1/updates/check` response `download_url` |
 
 ### FirebirdDSN
 
@@ -145,6 +147,30 @@ SYSDBA:profes@192.168.0.152:3050/var/lib/firebird/3.0/data/aweh_test/dinem.fdb?a
 - `wire_crypt=false` — Unencrypted connection (dev/testing only)
 
 Set these via environment variables (`AUTH_PLUGIN`, `WIRE_CRYPT`) to match your Firebird server's configuration.
+
+---
+
+## 3.6 Client Downloads Hosting
+
+Gateway serves release binaries from:
+
+- `GET /downloads/<file>`
+
+Example:
+
+- `http://192.168.0.142:8081/downloads/aweh-backoffice-v1.0.0.apk`
+- `http://192.168.0.142:8081/downloads/aweh-backoffice-v1.0.0.exe`
+
+Docker deployment maps host folder to container:
+
+- host: `./downloads`
+- container: `/app/downloads`
+
+If you need the legacy path format on POS service port:
+
+- `http://192.168.0.142:8080/downloads/<file>`
+
+configure your existing reverse proxy/service on `8080` to forward `/downloads/*` to gateway `8081`.
 
 ---
 

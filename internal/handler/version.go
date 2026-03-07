@@ -134,21 +134,21 @@ func atoi(s string) int {
 
 // buildDownloadURL constructs the download URL based on platform
 func buildDownloadURL(platform, version string) string {
-	// In production, this would point to your CDN or file server
+	// In production, this points to your file server or gateway /downloads endpoint.
 	baseURL := os.Getenv("DOWNLOAD_BASE_URL")
 	if baseURL == "" {
-		baseURL = "https://updates.aweh.pos/releases"
+		baseURL = "http://localhost:8081/downloads"
 	}
 
 	switch platform {
 	case "windows":
-		return baseURL + "/aweh-pos-" + version + "-windows.msi"
+		return baseURL + "/aweh-backoffice-v" + version + ".exe"
 	case "android":
-		return baseURL + "/aweh-pos-" + version + ".apk"
+		return baseURL + "/aweh-backoffice-v" + version + ".apk"
 	case "linux":
-		return baseURL + "/aweh-pos-" + version + "-linux.AppImage"
+		return baseURL + "/aweh-backoffice-v" + version + "-linux.AppImage"
 	case "macos":
-		return baseURL + "/aweh-pos-" + version + "-macos.dmg"
+		return baseURL + "/aweh-backoffice-v" + version + "-macos.dmg"
 	default:
 		return ""
 	}

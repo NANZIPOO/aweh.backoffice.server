@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -93,6 +94,14 @@ func main() {
 
 	// 7. Define Handlers
 	jwtSecret := cfg.JWTSecret
+	wireCrypt := "false"
+	if cfg.WireCrypt {
+		wireCrypt = "true"
+	}
+	buildDSN := func(dbHost, dbPort, dbPath string) string {
+		return fmt.Sprintf("%s:%s@%s:%s/%s?auth_plugin_name=%s&wire_crypt=%s",
+			cfg.DBUser, cfg.DBPass, dbHost, dbPort, dbPath, cfg.AuthPlugin, wireCrypt)
+	}
 
 	// Health Check / Company Info for Flutter Branding
 	http.HandleFunc("/api/v1/company", func(w http.ResponseWriter, r *http.Request) {
@@ -105,9 +114,8 @@ func main() {
 		q := r.URL.Query()
 		h, p, path := q.Get("db_host"), q.Get("db_port"), q.Get("db_path")
 		if h != "" && path != "" {
-			// Rebuild DSN with the same credentials and auth params from config.
-			dsn := fmt.Sprintf("%s:%s@%s:%s/%s?auth_plugin_name=Legacy_Auth&wire_crypt=false",
-				cfg.DBUser, cfg.DBPass, h, p, path)
+			// Rebuild DSN with runtime auth settings from config.
+			dsn := buildDSN(h, p, path)
 			tm.RegisterTenantDB("tenant_test_001", dsn)
 		}
 
@@ -157,8 +165,7 @@ func main() {
 			return
 		}
 
-		dsn := fmt.Sprintf("%s:%s@%s:%s/%s?auth_plugin_name=Legacy_Auth&wire_crypt=false",
-			cfg.DBUser, cfg.DBPass, h, p, path)
+		dsn := buildDSN(h, p, path)
 		tm.RegisterTenantDB("tenant_test_001", dsn)
 
 		if err := tm.PingTenant("tenant_test_001"); err != nil {
@@ -185,6 +192,15 @@ func main() {
 	
 	// Version Info Handler - Returns server build metadata
 	http.HandleFunc("/api/v1/version", handler.GetVersionHandler)
+
+	// Download endpoint for published client binaries (APK/EXE).
+	// Place files in DOWNLOADS_DIR on host (default: ./downloads).
+	downloadsDir := os.Getenv("DOWNLOADS_DIR")
+	if downloadsDir == "" {
+		downloadsDir = "downloads"
+	}
+	log.Printf("Downloads directory: %s", downloadsDir)
+	http.Handle("/downloads/", http.StripPrefix("/downloads/", http.FileServer(http.Dir(downloadsDir))))
 
 	// Login Handler - Authenticate with FirstName + PIN
 	http.HandleFunc("/api/v1/login", func(w http.ResponseWriter, r *http.Request) {

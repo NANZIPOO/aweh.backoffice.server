@@ -22,12 +22,17 @@ services:
       DB_PATH: ${DB_PATH:-/var/lib/firebird/data/dinem.fdb}
       DB_USER: ${DB_USER:-SYSDBA}
       DB_PASS: ${DB_PASS:-masterkey}
+      AUTH_PLUGIN: ${AUTH_PLUGIN:-Srp256}
+      WIRE_CRYPT: ${WIRE_CRYPT:-true}
+      AUTO_MIGRATE: ${AUTO_MIGRATE:-false}
       JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
       PORT: ${PORT:-8081}
       ENVIRONMENT: ${ENVIRONMENT:-production}
-      DOWNLOAD_BASE_URL: ${DOWNLOAD_BASE_URL:-https://updates.aweh.pos/releases}
+      DOWNLOAD_BASE_URL: ${DOWNLOAD_BASE_URL:-http://localhost:8081/downloads}
+      DOWNLOADS_DIR: ${DOWNLOADS_DIR:-/app/downloads}
     volumes:
       - ./migrations:/app/migrations:ro
+      - ./downloads:/app/downloads:ro
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/api/v1/version"]
       interval: 30s
