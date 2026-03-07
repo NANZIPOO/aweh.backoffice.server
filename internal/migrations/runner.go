@@ -169,8 +169,8 @@ func applyMigration(db *sql.DB, filePath, fileName string) error {
 	defer tx.Rollback()
 
 	// Execute the migration SQL
-	// Split by semicolon to handle multiple statements
-	statements := strings.Split(sqlContent, ";")
+	// Parse statements smartly: handle triggers/procedures specially (they have internal semicolons)
+	statements := splitSQLStatements(sqlContent)
 	for _, stmt := range statements {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
@@ -203,6 +203,78 @@ func applyMigration(db *sql.DB, filePath, fileName string) error {
 	}
 
 	return nil
+}
+
+// splitSQLStatements splits SQL content into individual statements, handling triggers/procedures/functions
+// that have internal semicolons correctly (not splitting them).
+func splitSQLStatements(sqlContent string) []string {
+	var statements []string
+	var currentStmt strings.Builder
+	lines := strings.Split(sqlContent, "\n")
+	inTriggerOrProc := false
+	nestedBeginCount := 0
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Detect start of trigger/procedure/function
+		if !inTriggerOrProc && (strings.Contains(strings.ToUpper(trimmed), "CREATE OR ALTER TRIGGER") ||
+			strings.Contains(strings.ToUpper(trimmed), "CREATE TRIGGER") ||
+			strings.Contains(strings.ToUpper(trimmed), "CREATE OR ALTER PROCEDURE") ||
+			strings.Contains(strings.ToUpper(trimmed), "CREATE PROCEDURE") ||
+			strings.Contains(strings.ToUpper(trimmed), "CREATE OR ALTER FUNCTION") ||
+			strings.Contains(strings.ToUpper(trimmed), "CREATE FUNCTION")) {
+			inTriggerOrProc = true
+			nestedBeginCount = 0
+		}
+
+		if inTriggerOrProc {
+			currentStmt.WriteString(line)
+			currentStmt.WriteString("\n")
+
+			// Count nested BEGIN/END keywords accurately
+			upperLine := strings.ToUpper(trimmed)
+			if !strings.HasPrefix(trimmed, "--") {
+				// Count BEGIN keywords (word boundaries)
+				if strings.HasPrefix(upperLine, "BEGIN") || strings.Contains(upperLine, " BEGIN") {
+					nestedBeginCount++
+				}
+				// Count END keywords (word boundaries)
+				if trimmed == "END" || trimmed == "END;" || strings.HasSuffix(upperLine, " END") || strings.HasSuffix(upperLine, " END;") {
+					nestedBeginCount--
+				}
+			}
+
+			// When all BEGINs are matched with ENDs (count reaches 0), trigger/proc/func is complete
+			if nestedBeginCount <= 0 && (trimmed == "END" || trimmed == "END;") {
+				stmt := currentStmt.String()
+				if s := strings.TrimSpace(stmt); s != "" {
+					statements = append(statements, s)
+				}
+				currentStmt.Reset()
+				inTriggerOrProc = false
+			}
+		} else {
+			// Normal statement: accumulate until we hit a semicolon
+			currentStmt.WriteString(line)
+			currentStmt.WriteString("\n")
+
+			if strings.HasSuffix(trimmed, ";") {
+				stmt := currentStmt.String()
+				if s := strings.TrimSpace(stmt); s != "" {
+					statements = append(statements, s)
+				}
+				currentStmt.Reset()
+			}
+		}
+	}
+
+	// Add any remaining content as a final statement
+	if remaining := strings.TrimSpace(currentStmt.String()); remaining != "" {
+		statements = append(statements, remaining)
+	}
+
+	return statements
 }
 
 // stripSQLComments removes single-line SQL comments so comment-only blocks

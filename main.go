@@ -189,7 +189,7 @@ func main() {
 
 	// Version Check Handler - For app update notifications
 	http.HandleFunc("/api/v1/updates/check", handler.CheckVersionHandler)
-	
+
 	// Version Info Handler - Returns server build metadata
 	http.HandleFunc("/api/v1/version", handler.GetVersionHandler)
 

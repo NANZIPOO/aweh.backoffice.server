@@ -17,8 +17,8 @@ type InventoryItem struct {
 	ItemPartNo  int64      `db:"ITEMPARTNO"    json:"id"`
 	MPartNo     string     `db:"MPARTNO"       json:"supplier_part_no"`
 	Barcode     NullString `db:"BARCODE"       json:"barcode"`
-	LinkedSKU   NullString `db:"LINKEDSKU"     json:"linked_sku"`
-	SupplierSKU NullString `db:"SUPPLIERSKU"   json:"supplier_sku"`
+	// LinkedSKU   NullString `db:"LINKEDSKU"     json:"linked_sku"`      // TODO: Add migration for this column
+	// SupplierSKU NullString `db:"SUPPLIERSKU"   json:"supplier_sku"`   // TODO: Add migration for this column
 	ItemImage   NullString `db:"ITEM_IMAGE"    json:"item_image"`
 
 	// Classification

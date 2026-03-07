@@ -33,8 +33,8 @@ func Load() (*Config, error) {
 		DBPath:      dbPath,
 		DBUser:      getEnv("DB_USER", "SYSDBA"),
 		DBPass:      getEnv("DB_PASS", "profes"),
-		AuthPlugin:  getEnv("AUTH_PLUGIN", "Srp256"),    // Srp256 or Legacy_Auth
-		WireCrypt:   getEnvBool("WIRE_CRYPT", true),      // true or false
+		AuthPlugin:  getEnv("AUTH_PLUGIN", "Srp256"), // Srp256 or Legacy_Auth
+		WireCrypt:   getEnvBool("WIRE_CRYPT", true),  // true or false
 		JWTSecret:   []byte(getEnv("JWT_SECRET", "your-secret-key")),
 		Port:        getEnv("PORT", "8081"),
 		AutoMigrate: getEnvBool("AUTO_MIGRATE", false),

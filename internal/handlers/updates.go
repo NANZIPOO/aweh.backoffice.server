@@ -58,7 +58,7 @@ func CheckForUpdates(w http.ResponseWriter, r *http.Request) {
 
 	// Compare versions
 	updateAvailable := compareVersions(currentVersion, ServerVersion.Version)
-	
+
 	// Build download URL based on platform
 	downloadURL := buildDownloadURL(platform, ServerVersion.Version)
 

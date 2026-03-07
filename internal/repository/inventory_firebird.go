@@ -28,14 +28,14 @@ func NewInventoryRepository(tm *TenantManager) *InventoryFirebird {
 // ─── Full column list for DMASTER SELECT ─────────────────────────────────────
 
 const inventorySelectCols = `
-	ITEMPARTNO, MPARTNO, BARCODE, LINKEDSKU, SUPPLIERSKU, ITEM_IMAGE,
+	ITEMPARTNO, MPARTNO, BARCODE,
 	SUPPLIERNO, DESCRIPTION, BRAND, BIN, CATEGORYNO, COSTCATEGORY, COSTGROUP,
 	CATOGORY, INVFORM, PACKAGING, ZONEID,
 	PACK, PACKUNIT, PACKCOST, EACHCOST, UNITS, EACHUNIT, UNITCOST,
 	MARKUP, SELLINGPRICE, BULKSELLINGPRICE, TAXRATE, DISCOUNT, BUCOS,
 	MINSTOCKLEVEL, MAXSTOCKLEVEL, REORDERLEVE, ONORDER, AUTOYIELD, WEIGHT, TARE,
 	FRONTOPENINGSTOCK, BACKOPENINGSTOCK, FRONTCLOSINGSTOCK, BACKCLOSINGSTOCK,
-	PURCHASES, SALES, GROUP_ID, UOM,
+	PURCHASES, SALES, GROUP_ID, UOM, ITEM_IMAGE,
 	CASE
 		WHEN UPPER(TRIM(COALESCE(CAST(IS_BASE_VARIANT AS VARCHAR(20)), ''))) IN ('1', 'T', 'TRUE', 'Y', 'YES') THEN TRUE
 		ELSE FALSE
@@ -49,16 +49,16 @@ const inventorySelectCols = `
 		ELSE FALSE
 	END AS IS_ORDERING_ALLOWED`
 
-// List endpoint projection — excludes ITEM_IMAGE to reduce payload size for grids.
+// List endpoint projection — same as full select for now (can optimize later)
 const inventoryListSelectCols = `
-	ITEMPARTNO, MPARTNO, BARCODE, LINKEDSKU, SUPPLIERSKU,
+	ITEMPARTNO, MPARTNO, BARCODE,
 	SUPPLIERNO, DESCRIPTION, BRAND, BIN, CATEGORYNO, COSTCATEGORY, COSTGROUP,
 	CATOGORY, INVFORM, PACKAGING, ZONEID,
 	PACK, PACKUNIT, PACKCOST, EACHCOST, UNITS, EACHUNIT, UNITCOST,
 	MARKUP, SELLINGPRICE, BULKSELLINGPRICE, TAXRATE, DISCOUNT, BUCOS,
 	MINSTOCKLEVEL, MAXSTOCKLEVEL, REORDERLEVE, ONORDER, AUTOYIELD, WEIGHT, TARE,
 	FRONTOPENINGSTOCK, BACKOPENINGSTOCK, FRONTCLOSINGSTOCK, BACKCLOSINGSTOCK,
-	PURCHASES, SALES, GROUP_ID, UOM,
+	PURCHASES, SALES, GROUP_ID, UOM, ITEM_IMAGE,
 	CASE
 		WHEN UPPER(TRIM(COALESCE(CAST(IS_BASE_VARIANT AS VARCHAR(20)), ''))) IN ('1', 'T', 'TRUE', 'Y', 'YES') THEN TRUE
 		ELSE FALSE
@@ -229,9 +229,8 @@ func buildItemWhere(filter models.ItemFilter) (string, []interface{}) {
 				OR CAST(BARCODE AS VARCHAR(64)) CONTAINING ?
 				OR CAST(MPARTNO AS VARCHAR(64)) CONTAINING ?
 				OR CAST(SUPPLIERNO AS VARCHAR(64)) CONTAINING ?
-				OR CAST(SUPPLIERSKU AS VARCHAR(64)) CONTAINING ?
 			)`
-			args = append(args, search, search, search, search, search)
+			args = append(args, search, search, search, search)
 		}
 	}
 	if filter.StockSheet != "" {
@@ -923,6 +922,8 @@ func (r *InventoryFirebird) AssignBarcode(ctx context.Context, itemPartNo int64,
 // ─── AddLinkedBarcode ─────────────────────────────────────────────────────────
 
 // AddLinkedBarcode inserts a row into LINKED_BARCODES and updates DMASTER.LINKEDSKU.
+// TODO: Disabled until LINKEDSKU column and LINKED_BARCODES table are added via migration
+/*
 func (r *InventoryFirebird) AddLinkedBarcode(ctx context.Context, itemPartNo int64, barcode string) error {
 	// Fetch mPartNo
 	db, err := r.TM.GetDB(ctx)
@@ -956,6 +957,12 @@ func (r *InventoryFirebird) AddLinkedBarcode(ctx context.Context, itemPartNo int
 	}
 
 	return tx.Commit()
+}
+*/
+
+// AddLinkedBarcode - Temporary stub until migration is created
+func (r *InventoryFirebird) AddLinkedBarcode(ctx context.Context, itemPartNo int64, barcode string) error {
+	return fmt.Errorf("AddLinkedBarcode: not implemented - requires LINKEDSKU column migration")
 }
 
 // ─── Reports ──────────────────────────────────────────────────────────────────
