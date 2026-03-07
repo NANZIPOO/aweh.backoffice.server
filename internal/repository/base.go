@@ -101,6 +101,20 @@ func (tm *TenantManager) PingTenant(tenantID string) error {
 	return db.Ping()
 }
 
+// GetTenantDB retrieves the connection pool for a specific tenant (by ID, not context).
+// Used for initialization tasks like running migrations where context may not be available.
+func (tm *TenantManager) GetTenantDB(tenantID string) (*sqlx.DB, error) {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+
+	db, ok := tm.conns[tenantID]
+	if !ok {
+		return nil, fmt.Errorf("tenant %s not connected", tenantID)
+	}
+
+	return db, nil
+}
+
 // BaseRepository is embedded by specific repositories to access the tenant DB
 type BaseRepository struct {
 	TM *TenantManager

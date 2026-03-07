@@ -44,6 +44,8 @@ chmod +x deploy/deploy.sh
 1. [Overview](#1-overview)
 2. [Repository Structure](#2-repository-structure)
 3. [Configuration](#3-configuration)
+   - [FirebirdDSN](#firebirddsn)
+   - [Database Migrations](#35-database-migrations-auto-setup)
 4. [How to Build & Run](#4-how-to-build--run)
 5. [Authentication & JWT](#5-authentication--jwt)
 6. [Access Level System](#6-access-level-system)
@@ -138,6 +140,63 @@ The `auth_plugin_name=Legacy_Auth&wire_crypt=false` query params are **mandatory
 > - Port `3055` → **Firebird 5.0** (separate instance — do not target for this app)
 
 > **Port 8080 is permanently occupied by a Windows system service (`svchost`) on this machine.** The gateway runs on `8081`. `freePort` is aware and will never kill `svchost`.
+
+---
+
+## 3.5 Database Migrations (Auto-Setup)
+
+The gateway includes an **automatic schema migration system** that runs on startup. It is designed to be idempotent and side-effect-free for production environments.
+
+### How It Works
+
+1. **Startup Phase**: After the DB ping succeeds, the migrator runs (if `AUTO_MIGRATE=true`).
+2. **Tracking Table**: A table called `RDB$MIGRATIONS` is created to track which migrations have been applied.
+3. **File Discovery**: All `.sql` files in the `migrations/` folder are discovered and sorted by filename (e.g., `001_*.sql`, `002_*.sql`, etc.).
+4. **Idempotent Execution**: For each file, the migrator checks if it's already in the tracking table. If yes, it skips it. If no, it executes all SQL statements and records the migration.
+5. **Transaction Safety**: Each migration runs within a Firebird transaction. If any statement fails, the entire migration is rolled back and the server exits with an error.
+
+### Configuration
+
+Set `AUTO_MIGRATE` in your `.env` file:
+
+```bash
+# Enable automatic schema migrations on startup
+AUTO_MIGRATE=true     # Run pending migrations on boot
+AUTO_MIGRATE=false    # Skip migrations (manual application)
+```
+
+**Safe defaults:**
+- **Development**: Set `AUTO_MIGRATE=true` to automatically seed new tables and schema changes.
+- **Production**: Set `AUTO_MIGRATE=false` (default). Review and apply migrations manually via other tools.
+
+### Adding New Migrations
+
+To add a new migration:
+
+1. Create a new `.sql` file in `gateway/migrations/` with a sequential numeric prefix (e.g., `010_add_my_column.sql`).
+2. Write standard Firebird SQL (`CREATE TABLE`, `ALTER TABLE`, etc.).
+3. On next deployment with `AUTO_MIGRATE=true`, the system will automatically detect and apply it.
+4. The migration state is persisted in `RDB$MIGRATIONS`, so re-deploying the same image will skip already-applied migrations.
+
+### Example Migration File
+
+**`gateway/migrations/010_add_my_column.sql`:**
+```sql
+ALTER TABLE DMASTER ADD MY_NEW_COLUMN VARCHAR(100);
+COMMIT;
+```
+
+On startup, if `AUTO_MIGRATE=true`:
+```
+2026/03/07 10:15:22 migrations: Starting automatic migration runner...
+2026/03/07 10:15:22 migrations: RDB$MIGRATIONS tracking table created
+2026/03/07 10:15:22 migrations: Found 10 migration file(s)
+2026/03/07 10:15:22 migrations: 001_create_generators.sql already applied, skipping
+...
+2026/03/07 10:15:22 migrations: Applying 010_add_my_column.sql...
+2026/03/07 10:15:22 migrations: ✓ 010_add_my_column.sql applied successfully
+2026/03/07 10:15:22 migrations: All pending migrations applied successfully
+```
 
 ---
 

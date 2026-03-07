@@ -15,6 +15,7 @@ import (
 	"github.com/aweh-pos/gateway/internal/config"
 	"github.com/aweh-pos/gateway/internal/handler"
 	"github.com/aweh-pos/gateway/internal/middleware"
+	"github.com/aweh-pos/gateway/internal/migrations"
 	"github.com/aweh-pos/gateway/internal/models"
 	"github.com/aweh-pos/gateway/internal/repository"
 )
@@ -57,6 +58,15 @@ func main() {
 		log.Fatalf("DB ping failed for tenant_test_001: %v", err)
 	}
 	log.Println("DB connection OK —", cfg.FirebirdDSN())
+
+	// 1.5 Run migrations if AUTO_MIGRATE is enabled
+	tenantDB, err := tm.GetTenantDB("tenant_test_001")
+	if err != nil {
+		log.Fatalf("migrations: failed to get tenant DB: %v", err)
+	}
+	if err := migrations.RunMigrations(tenantDB.DB, cfg.AutoMigrate); err != nil {
+		log.Fatalf("migrations: %v", err)
+	}
 
 	// 2. Initialise legacy Repositories
 	compRepo := repository.NewCompanyRepository(tm)

@@ -7,13 +7,14 @@ import (
 
 // Config holds all runtime configuration loaded from environment variables.
 type Config struct {
-	DBHost    string
-	DBPort    string
-	DBPath    string
-	DBUser    string
-	DBPass    string
-	JWTSecret []byte
-	Port      string
+	DBHost      string
+	DBPort      string
+	DBPath      string
+	DBUser      string
+	DBPass      string
+	JWTSecret   []byte
+	Port        string
+	AutoMigrate bool
 }
 
 // Load reads configuration from environment variables.
@@ -25,13 +26,14 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		DBHost:    getEnv("DB_HOST", "localhost"),
-		DBPort:    getEnv("DB_PORT", "3050"), // FB3 instance (legacy dinem.fdb)
-		DBPath:    dbPath,
-		DBUser:    getEnv("DB_USER", "SYSDBA"),
-		DBPass:    getEnv("DB_PASS", "profes"),
-		JWTSecret: []byte(getEnv("JWT_SECRET", "your-secret-key")),
-		Port:      getEnv("PORT", "8081"),
+		DBHost:      getEnv("DB_HOST", "localhost"),
+		DBPort:      getEnv("DB_PORT", "3050"), // FB3 instance (legacy dinem.fdb)
+		DBPath:      dbPath,
+		DBUser:      getEnv("DB_USER", "SYSDBA"),
+		DBPass:      getEnv("DB_PASS", "profes"),
+		JWTSecret:   []byte(getEnv("JWT_SECRET", "your-secret-key")),
+		Port:        getEnv("PORT", "8081"),
+		AutoMigrate: getEnvBool("AUTO_MIGRATE", false),
 	}, nil
 }
 
@@ -47,6 +49,13 @@ func (c *Config) FirebirdDSN() string {
 func getEnv(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return defaultVal
+}
+
+func getEnvBool(key string, defaultVal bool) bool {
+	if v := os.Getenv(key); v != "" {
+		return v == "true" || v == "1" || v == "yes"
 	}
 	return defaultVal
 }
