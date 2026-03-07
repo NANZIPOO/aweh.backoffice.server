@@ -158,14 +158,14 @@ Gateway serves release binaries from:
 
 Example:
 
-- `http://192.168.0.142:8081/downloads/aweh-backoffice-v1.0.0+1.apk`
-- `http://192.168.0.142:8081/downloads/aweh-backoffice-v1.0.0+1.exe`
+- `http://192.168.0.142:8081/downloads/aweh-backoffice-v1.0.0-b1.apk`
+- `http://192.168.0.142:8081/downloads/aweh-backoffice-v1.0.0-b1-windows.zip`
 
 CLI verification (safe when filename contains `+`):
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:8081/downloads/aweh-backoffice-v1.0.0%2B1.apk"
-curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:8081/downloads/aweh-backoffice-v1.0.0%2B1.exe"
+curl -s -o /dev/null -w "%{http_code}\n" "http://127.0.0.1:8081/downloads/aweh-backoffice-v1.0.0-b1-windows.zip"
 ```
 
 Docker deployment maps host folder to container:

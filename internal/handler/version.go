@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -140,15 +141,19 @@ func buildDownloadURL(platform, version string) string {
 		baseURL = "http://localhost:8081/downloads"
 	}
 
+	releaseVersion := strings.TrimPrefix(version, "v")
+	releaseTag := fmt.Sprintf("%s-b%d", releaseVersion, ServerVersion.BuildNumber)
+
 	switch platform {
 	case "windows":
-		return baseURL + "/aweh-backoffice-v" + version + ".exe"
+		// Windows must be distributed as a bundle (exe + DLLs + data folder).
+		return baseURL + "/aweh-backoffice-v" + releaseTag + "-windows.zip"
 	case "android":
-		return baseURL + "/aweh-backoffice-v" + version + ".apk"
+		return baseURL + "/aweh-backoffice-v" + releaseTag + ".apk"
 	case "linux":
-		return baseURL + "/aweh-backoffice-v" + version + "-linux.AppImage"
+		return baseURL + "/aweh-backoffice-v" + releaseTag + "-linux.AppImage"
 	case "macos":
-		return baseURL + "/aweh-backoffice-v" + version + "-macos.dmg"
+		return baseURL + "/aweh-backoffice-v" + releaseTag + "-macos.dmg"
 	default:
 		return ""
 	}
