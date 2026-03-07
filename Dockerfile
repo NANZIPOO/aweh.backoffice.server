@@ -23,11 +23,7 @@ ARG GIT_HASH=unknown
 ARG BUILD_DATE=unknown
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-w -s \
-    -X 'github.com/aweh-pos/gateway/internal/handlers.ServerVersion.Version=${VERSION}' \
-    -X 'github.com/aweh-pos/gateway/internal/handlers.ServerVersion.BuildNumber=${BUILD_NUMBER}' \
-    -X 'github.com/aweh-pos/gateway/internal/handlers.ServerVersion.GitHash=${GIT_HASH}' \
-    -X 'github.com/aweh-pos/gateway/internal/handlers.ServerVersion.BuildDate=${BUILD_DATE}'" \
+    -ldflags="-w -s" \
     -o gateway main.go
 
 # Stage 2: Create minimal runtime image
@@ -60,7 +56,7 @@ EXPOSE 8081
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8081/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8081/api/v1/version || exit 1
 
 # Run the gateway
 ENTRYPOINT ["./gateway"]

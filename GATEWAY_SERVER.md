@@ -1,3 +1,36 @@
+# Linux Docker Deployment
+
+## 1) Clone and prepare
+
+```bash
+git clone https://github.com/NANZIPOO/aweh.backoffice.server.git
+cd aweh.backoffice.server
+cp .env.example .env
+```
+
+Edit `.env` and set:
+- `DB_HOST` = Firebird server IP/DNS
+- `DB_PORT` = `3050`
+- `DB_PATH` = absolute Linux path on Firebird server (example `/var/lib/firebird/data/dinem.fdb`)
+- `DB_USER`, `DB_PASS`, `JWT_SECRET`
+
+## 2) Run deployment app
+
+```bash
+chmod +x deploy/deploy.sh
+./deploy/deploy.sh install
+```
+
+## 3) Operations
+
+```bash
+./deploy/deploy.sh status
+./deploy/deploy.sh logs
+./deploy/deploy.sh update
+./deploy/deploy.sh restart
+./deploy/deploy.sh down
+```
+
 # Aweh POS — Go Gateway Server
 
 > **Stack:** Go 1.22 · `net/http` stdlib router · `sqlx` · `nakagami/firebirdsql` · `golang-jwt/jwt v5`

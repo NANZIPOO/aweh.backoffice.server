@@ -12,22 +12,24 @@ services:
         BUILD_DATE: ${BUILD_DATE:-2026-03-07}
     container_name: aweh-backoffice-gateway
     restart: unless-stopped
+    env_file:
+      - .env
     ports:
       - "8081:8081"
     environment:
-      DB_HOST: ${DB_HOST}
-      DB_PORT: ${DB_PORT}
-      DB_PATH: ${DB_PATH}
-      DB_USER: ${DB_USER}
-      DB_PASS: ${DB_PASS}
-      JWT_SECRET: ${JWT_SECRET}
+      DB_HOST: ${DB_HOST:-localhost}
+      DB_PORT: ${DB_PORT:-3050}
+      DB_PATH: ${DB_PATH:-/var/lib/firebird/data/dinem.fdb}
+      DB_USER: ${DB_USER:-SYSDBA}
+      DB_PASS: ${DB_PASS:-masterkey}
+      JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
       PORT: ${PORT:-8081}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       DOWNLOAD_BASE_URL: ${DOWNLOAD_BASE_URL:-https://updates.aweh.pos/releases}
     volumes:
       - ./migrations:/app/migrations:ro
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/api/v1/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/api/v1/version"]
       interval: 30s
       timeout: 3s
       retries: 3
