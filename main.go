@@ -529,7 +529,11 @@ func main() {
 
 	// GET /api/v1/purchase-orders?supplier_no={s}
 	http.Handle("GET /api/v1/purchase-orders", middleware.AuthMiddleware(jwtSecret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		orders, err := poRepo.ListOrders(r.Context(), r.URL.Query().Get("supplier_no"))
+		orders, err := poRepo.ListOrders(
+			r.Context(),
+			r.URL.Query().Get("supplier_no"),
+			r.URL.Query().Get("status"),
+		)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
@@ -592,12 +596,11 @@ func main() {
 		if !ok {
 			return
 		}
-		order, err := poRepo.GetOrder(r.Context(), orderNo)
+		lines, err := poRepo.GetOrderLines(r.Context(), orderNo)
 		if err != nil {
 			writeErr(w, http.StatusNotFound, err.Error())
 			return
 		}
-		lines := order.Lines
 		if lines == nil {
 			lines = []models.OrderLineDetail{}
 		}

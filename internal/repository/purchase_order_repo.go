@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aweh-pos/gateway/internal/models"
@@ -32,15 +33,37 @@ func nullStr(n sql.NullString) string {
 	return ""
 }
 
+// dmasterToSupplierItem maps a raw DMASTER row to the API SupplierItem shape.
+// SupplierName is intentionally left blank here — callers populate it via a
+// separate targeted SELECT (no-JOIN rule).
+func dmasterToSupplierItem(d *models.DmasterItem) models.SupplierItem {
+	return models.SupplierItem{
+		MPartNo:      d.MPartNo,
+		Description:  nullStr(d.Description),
+		SupplierNo:   nullStr(d.SupplierNo),
+		PackCost:     d.PackCost.StringFixed(4),
+		EachCost:     d.EachCost.StringFixed(4),
+		Pack:         d.Pack.StringFixed(4),
+		Units:        d.Units,
+		OnOrder:      d.OnOrder.StringFixed(4),
+		TaxRate:      d.TaxRate,
+		CostGroup:    nullStr(d.CostGroup),
+		CostCategory: nullStr(d.CostCategory),
+		PackUnit:     nullStr(d.PackUnit),
+		EachUnit:     nullStr(d.EachUnit),
+		Packaging:    nullStr(d.Packaging),
+	}
+}
+
 // writeError returns a formatted APIError for consistent JSON payloads in handlers.
 func writeError(msg string) models.APIError { return models.APIError{Error: msg} }
 
-// orderStatus maps EXPENSES.RECEIVED into the API status string.
+// orderStatus maps EXPENSES.RECEIVED into the legacy API status string.
 func orderStatus(r models.FBBoolChar) string {
 	if r.IsTrue() {
-		return "posted"
+		return "RECEIVED"
 	}
-	return "draft"
+	return "OPEN"
 }
 
 // computeLine derives the full OrderLineDetail from a PItem DB row.
@@ -78,17 +101,25 @@ func computeLine(p *models.PItem) models.OrderLineDetail {
 	}
 }
 
-// fetchLines returns all PITEMS rows for an order and computes their line details.
-// No JOIN — called separately after fetching the EXPENSES header.
-func (r *PurchaseOrderRepository) fetchLines(ctx context.Context, db interface {
+// fetchLinesFromTable returns all line rows for an order from either PITEMS (active)
+// or PITEMSHIS (history), and computes API line details.
+func (r *PurchaseOrderRepository) fetchLinesFromTable(ctx context.Context, db interface {
 	SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
-}, orderNo int64) ([]models.OrderLineDetail, error) {
-	const q = `
+}, orderNo int64, fromHistory bool) ([]models.OrderLineDetail, error) {
+	q := `
 		SELECT ORDERNO, ITEMNO, MPARTNO, DESCRIPTION, QTY, PACK,
 		       PACKCOST, EACHCOST, SUPPLIER, CATEGORY, COSTGROUP, COSTCATEGORY,
 		       ORDERDATE, PURCHDATE, INVDATE, PURCHASES, POSTED, TAXRATE,
 		       DISCOUNT, UNITS, EACHUNIT, PACKUNIT, PACKAGING
 		FROM PITEMS WHERE ORDERNO = ? ORDER BY ITEMNO`
+	if fromHistory {
+		q = `
+		SELECT ORDERNO, ITEMNO, MPARTNO, DESCRIPTION, QTY, PACK,
+		       PACKCOST, EACHCOST, SUPPLIER, CATEGORY, COSTGROUP, COSTCATEGORY,
+		       ORDERDATE, PURCHDATE, INVDATE, PURCHASES, POSTED, TAXRATE,
+		       DISCOUNT, UNITS, EACHUNIT, PACKUNIT, PACKAGING
+		FROM PITEMSHIS WHERE ORDERNO = ? ORDER BY ITEMNO`
+	}
 
 	var rows []models.PItem
 	if err := db.SelectContext(ctx, &rows, q, orderNo); err != nil {
@@ -100,6 +131,52 @@ func (r *PurchaseOrderRepository) fetchLines(ctx context.Context, db interface {
 		details = append(details, computeLine(&rows[i]))
 	}
 	return details, nil
+}
+
+// fetchOrderLinesForLifecycle reads lines according to order lifecycle:
+// OPEN/DRAFT -> PITEMS, RECEIVED/POSTED -> PITEMSHIS.
+// It also falls back to the alternate table if the preferred table is empty.
+func (r *PurchaseOrderRepository) fetchOrderLinesForLifecycle(ctx context.Context, db interface {
+	SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
+}, orderNo int64, received models.FBBoolChar) ([]models.OrderLineDetail, error) {
+	preferHistory := received.IsTrue()
+
+	preferred, err := r.fetchLinesFromTable(ctx, db, orderNo, preferHistory)
+	if err != nil {
+		return nil, err
+	}
+	if len(preferred) > 0 {
+		return preferred, nil
+	}
+
+	fallback, err := r.fetchLinesFromTable(ctx, db, orderNo, !preferHistory)
+	if err != nil {
+		return nil, err
+	}
+	return fallback, nil
+}
+
+// GetOrderLines returns line items for an order using the exact PO lifecycle rules:
+// active OPEN orders read from PITEMS, posted/received orders read from PITEMSHIS.
+func (r *PurchaseOrderRepository) GetOrderLines(ctx context.Context, orderNo int64) ([]models.OrderLineDetail, error) {
+	db, err := r.TM.GetDB(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get order lines: resolve db: %w", err)
+	}
+
+	var received models.FBBoolChar
+	if err := db.QueryRowContext(ctx, `SELECT RECEIVED FROM EXPENSES WHERE ORDERNO = ?`, orderNo).Scan(&received); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("order %d not found", orderNo)
+		}
+		return nil, fmt.Errorf("get order lines: read header: %w", err)
+	}
+
+	lines, err := r.fetchOrderLinesForLifecycle(ctx, db, orderNo, received)
+	if err != nil {
+		return nil, fmt.Errorf("get order lines: %w", err)
+	}
+	return lines, nil
 }
 
 // expenseToDetail converts an EXPENSES row + pre-computed lines to an OrderDetail.
@@ -123,44 +200,59 @@ func expenseToDetail(e *models.Expense, lines []models.OrderLineDetail) models.O
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ListOrders — GET /purchase-orders?supplier_no={s}
-// ---------------------------------------------------------------------------
-
-func (r *PurchaseOrderRepository) ListOrders(ctx context.Context, supplierNo string) ([]models.OrderSummary, error) {
+// ListOrders returns PO headers from EXPENSES filtered by supplier and status.
+func (r *PurchaseOrderRepository) ListOrders(ctx context.Context, supplierNo, status string) ([]models.OrderSummary, error) {
 	db, err := r.TM.GetDB(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list orders: resolve db: %w", err)
 	}
 
-	var (
-		rows  []models.Expense
-		query string
-		args  []interface{}
-	)
+	const baseQ = `SELECT ORDERNO, SUPPLIER, SUPPLIERNO, ORDERDATE, RECEIVED, NETTOTAL, VAT, DISCOUNT, ULLAGES, GRANDTOTAL, CATEGORY, PLACEDORDER, INVOICENO, PAYMETHOD, PAYREF, INVDATE, DISCOUNTDATE, PURCHDATE, DUEDATE FROM EXPENSES`
 
-	if supplierNo != "" {
-		query = `SELECT ORDERNO, SUPPLIER, SUPPLIERNO, ORDERDATE, RECEIVED, NETTOTAL, VAT, DISCOUNT, ULLAGES, GRANDTOTAL, CATEGORY, PLACEDORDER, INVOICENO, PAYMETHOD, PAYREF, INVDATE, DISCOUNTDATE, PURCHDATE, DUEDATE FROM EXPENSES WHERE SUPPLIERNO = ? ORDER BY ORDERNO DESC`
-		args = []interface{}{supplierNo}
-	} else {
-		query = `SELECT ORDERNO, SUPPLIER, SUPPLIERNO, ORDERDATE, RECEIVED, NETTOTAL, VAT, DISCOUNT, ULLAGES, GRANDTOTAL, CATEGORY, PLACEDORDER, INVOICENO, PAYMETHOD, PAYREF, INVDATE, DISCOUNTDATE, PURCHDATE, DUEDATE FROM EXPENSES ORDER BY ORDERNO DESC`
+	statusFilter := strings.ToUpper(strings.TrimSpace(status))
+	receivedChar := ""
+	switch statusFilter {
+	case "", "ALL":
+	case "OPEN", "DRAFT":
+		receivedChar = "F"
+	case "RECEIVED", "POSTED", "COMPLETE":
+		receivedChar = "T"
+	default:
+		return []models.OrderSummary{}, nil
 	}
 
+	query := baseQ
+	where := make([]string, 0, 2)
+	args := make([]interface{}, 0, 2)
+	if strings.TrimSpace(supplierNo) != "" {
+		where = append(where, "SUPPLIERNO = ?")
+		args = append(args, supplierNo)
+	}
+	if receivedChar != "" {
+		where = append(where, "RECEIVED = ?")
+		args = append(args, receivedChar)
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY ORDERNO DESC"
+
+	var rows []models.Expense
 	if err := db.SelectContext(ctx, &rows, query, args...); err != nil {
 		return nil, fmt.Errorf("list orders: query: %w", err)
 	}
 
 	summaries := make([]models.OrderSummary, 0, len(rows))
 	for _, e := range rows {
-		od := ""
+		orderDate := ""
 		if e.OrderDate.Valid {
-			od = e.OrderDate.Time.Format(time.RFC3339)
+			orderDate = e.OrderDate.Time.Format(time.RFC3339)
 		}
 		summaries = append(summaries, models.OrderSummary{
 			OrderNo:      e.OrderNo,
 			SupplierNo:   nullStr(e.SupplierNo),
 			SupplierName: nullStr(e.Supplier),
-			OrderDate:    od,
+			OrderDate:    orderDate,
 			Status:       orderStatus(e.Received),
 			GrandTotal:   e.GrandTotal.StringFixed(2),
 		})
@@ -188,7 +280,7 @@ func (r *PurchaseOrderRepository) GetOrder(ctx context.Context, orderNo int64) (
 		return nil, fmt.Errorf("get order: query: %w", err)
 	}
 
-	lines, err := r.fetchLines(ctx, db, orderNo)
+	lines, err := r.fetchOrderLinesForLifecycle(ctx, db, orderNo, e.Received)
 	if err != nil {
 		return nil, fmt.Errorf("get order: %w", err)
 	}
@@ -559,9 +651,9 @@ func (r *PurchaseOrderRepository) computeTotals(ctx context.Context, db interfac
 	const q = `SELECT QTY, PACKCOST, TAXRATE FROM PITEMS WHERE ORDERNO = ?`
 
 	type lineRow struct {
-		QTY      decimal.Decimal `db:"QTY"`
+		QTY     decimal.Decimal `db:"QTY"`
 		PackCost decimal.Decimal `db:"PACKCOST"`
-		TaxRate  sql.NullInt32   `db:"TAXRATE"`
+		TaxRate sql.NullInt32   `db:"TAXRATE"`
 	}
 	var rows []lineRow
 	_ = db.SelectContext(ctx, &rows, q, orderNo) // best-effort; returns zeros on error
@@ -1014,9 +1106,15 @@ func (r *PurchaseOrderRepository) GetSupplierItems(ctx context.Context, supplier
 		return nil, fmt.Errorf("supplier items: query: %w", err)
 	}
 
+	// Pre-fetch supplier name once (separate query, no JOIN).
+	var sName sql.NullString
+	_ = db.QueryRowContext(ctx, `SELECT FIRST 1 SUPPLIER FROM SUPPLIERS WHERE SUPPLIERNO = ?`, supplierNo).Scan(&sName)
+
 	out := make([]models.SupplierItem, 0, len(rows))
 	for _, d := range rows {
-		out = append(out, dmasterToSupplierItem(&d))
+		si := dmasterToSupplierItem(&d)
+		si.SupplierName = nullStr(sName)
+		out = append(out, si)
 	}
 	return out, nil
 }
@@ -1046,27 +1144,380 @@ func (r *PurchaseOrderRepository) SearchInventoryItem(ctx context.Context, mpart
 	}
 
 	si := dmasterToSupplierItem(&d)
+	// Look up supplier name separately (no JOIN rule).
+	var sName sql.NullString
+	_ = db.QueryRowContext(ctx, `SELECT FIRST 1 SUPPLIER FROM SUPPLIERS WHERE SUPPLIERNO = ?`, si.SupplierNo).Scan(&sName)
+	si.SupplierName = nullStr(sName)
 	return &si, nil
 }
 
+// fetchSupplierName returns the display name for a supplier by its business key.
+// Returns "" when not found — no-join rule: single targeted SELECT.
+func fetchSupplierName(ctx context.Context, db interface {
+QueryRowContext(context.Context, string, ...interface{}) *sql.Row
+}, supplierNo string) string {
+if supplierNo == "" {
+return ""
+}
+var name sql.NullString
+_ = db.QueryRowContext(ctx, "SELECT FIRST 1 SUPPLIER FROM SUPPLIERS WHERE SUPPLIERNO = ?", supplierNo).Scan(&name)
+return nullStr(name)
+}
+
 // ---------------------------------------------------------------------------
-// Private conversion helper
+// UpdateOrderHeader — PATCH /purchase-orders/{order_no}/header
 // ---------------------------------------------------------------------------
 
-func dmasterToSupplierItem(d *models.DmasterItem) models.SupplierItem {
-	return models.SupplierItem{
-		MPartNo:      d.MPartNo,
-		Description:  nullStr(d.Description),
-		PackCost:     d.PackCost.StringFixed(3),
-		EachCost:     d.EachCost.StringFixed(3),
-		Pack:         d.Pack.StringFixed(3),
-		Units:        d.Units,
-		OnOrder:      d.OnOrder.StringFixed(3),
-		TaxRate:      d.TaxRate,
-		CostGroup:    nullStr(d.CostGroup),
-		CostCategory: nullStr(d.CostCategory),
-		PackUnit:     nullStr(d.PackUnit),
-		EachUnit:     nullStr(d.EachUnit),
-		Packaging:    nullStr(d.Packaging),
-	}
+func (r *PurchaseOrderRepository) UpdateOrderHeader(ctx context.Context, orderNo int64, req *models.UpdateOrderHeaderRequest) (*models.OrderDetail, error) {
+db, err := r.TM.GetDB(ctx)
+if err != nil {
+return nil, fmt.Errorf("update header: resolve db: %w", err)
+}
+
+var received string
+if err := db.QueryRowContext(ctx, "SELECT RECEIVED FROM EXPENSES WHERE ORDERNO = ?", orderNo).Scan(&received); err != nil {
+if err == sql.ErrNoRows {
+return nil, fmt.Errorf("order %d not found", orderNo)
+}
+return nil, fmt.Errorf("update header: check status: %w", err)
+}
+if received == "T" || received == "t" {
+return nil, fmt.Errorf("order %d is already posted — cannot update header", orderNo)
+}
+
+tx, err := db.BeginTxx(ctx, nil)
+if err != nil {
+return nil, fmt.Errorf("update header: begin tx: %w", err)
+}
+defer tx.Rollback()
+
+if _, err := tx.ExecContext(ctx,
+"UPDATE EXPENSES SET SUPPLIER = ?, SUPPLIERNO = ? WHERE ORDERNO = ?",
+req.SupplierName, req.SupplierNo, orderNo,
+); err != nil {
+return nil, fmt.Errorf("update header: exec update: %w", err)
+}
+
+if err := tx.Commit(); err != nil {
+return nil, fmt.Errorf("update header: commit: %w", err)
+}
+
+return r.GetOrder(ctx, orderNo)
+}
+
+// ---------------------------------------------------------------------------
+// ConfirmOrder — POST /purchase-orders/{order_no}/confirm
+// Marks the order as placed with supplier (PLACEDORDER = 'T').
+// ---------------------------------------------------------------------------
+
+func (r *PurchaseOrderRepository) ConfirmOrder(ctx context.Context, orderNo int64) (*models.OrderDetail, error) {
+db, err := r.TM.GetDB(ctx)
+if err != nil {
+return nil, fmt.Errorf("confirm order: resolve db: %w", err)
+}
+
+var received string
+if err := db.QueryRowContext(ctx, "SELECT RECEIVED FROM EXPENSES WHERE ORDERNO = ?", orderNo).Scan(&received); err != nil {
+if err == sql.ErrNoRows {
+return nil, fmt.Errorf("order %d not found", orderNo)
+}
+return nil, fmt.Errorf("confirm order: check status: %w", err)
+}
+if received == "T" || received == "t" {
+return nil, fmt.Errorf("order %d is already posted — only OPEN orders can be confirmed", orderNo)
+}
+
+tx, err := db.BeginTxx(ctx, nil)
+if err != nil {
+return nil, fmt.Errorf("confirm order: begin tx: %w", err)
+}
+defer tx.Rollback()
+
+if _, err := tx.ExecContext(ctx, "UPDATE EXPENSES SET PLACEDORDER = 'T' WHERE ORDERNO = ?", orderNo); err != nil {
+return nil, fmt.Errorf("confirm order: exec update: %w", err)
+}
+
+if err := tx.Commit(); err != nil {
+return nil, fmt.Errorf("confirm order: commit: %w", err)
+}
+
+return r.GetOrder(ctx, orderNo)
+}
+
+// ---------------------------------------------------------------------------
+// CancelOrder — POST /purchase-orders/{order_no}/cancel
+// Un-places a draft order (PLACEDORDER = 'N'). userID and reason are accepted
+// for future audit-log integration but not persisted in this schema version.
+// ---------------------------------------------------------------------------
+
+func (r *PurchaseOrderRepository) CancelOrder(ctx context.Context, orderNo, _ int64, _ string) (*models.OrderDetail, error) {
+db, err := r.TM.GetDB(ctx)
+if err != nil {
+return nil, fmt.Errorf("cancel order: resolve db: %w", err)
+}
+
+var received sql.NullString
+if err := db.QueryRowContext(ctx, "SELECT RECEIVED FROM EXPENSES WHERE ORDERNO = ?", orderNo).Scan(&received); err != nil {
+if err == sql.ErrNoRows {
+return nil, fmt.Errorf("order %d not found", orderNo)
+}
+return nil, fmt.Errorf("cancel order: check status: %w", err)
+}
+if received.Valid && (received.String == "T" || received.String == "t") {
+return nil, fmt.Errorf("order %d is already posted — it cannot be canceled", orderNo)
+}
+
+tx, err := db.BeginTxx(ctx, nil)
+if err != nil {
+return nil, fmt.Errorf("cancel order: begin tx: %w", err)
+}
+defer tx.Rollback()
+
+if _, err := tx.ExecContext(ctx, "UPDATE EXPENSES SET PLACEDORDER = 'N' WHERE ORDERNO = ?", orderNo); err != nil {
+return nil, fmt.Errorf("cancel order: exec update: %w", err)
+}
+
+if err := tx.Commit(); err != nil {
+return nil, fmt.Errorf("cancel order: commit: %w", err)
+}
+
+return r.GetOrder(ctx, orderNo)
+}
+
+// ---------------------------------------------------------------------------
+// DuplicateOrder — POST /purchase-orders/{order_no}/duplicate
+// Creates a new draft order copying header + all PITEMS lines.
+// ---------------------------------------------------------------------------
+
+func (r *PurchaseOrderRepository) DuplicateOrder(ctx context.Context, srcOrderNo int64) (*models.OrderDetail, error) {
+db, err := r.TM.GetDB(ctx)
+if err != nil {
+return nil, fmt.Errorf("duplicate order: resolve db: %w", err)
+}
+
+const hdrSQL = "SELECT ORDERNO, SUPPLIER, SUPPLIERNO, ORDERDATE, RECEIVED, NETTOTAL, VAT, DISCOUNT, ULLAGES, GRANDTOTAL, CATEGORY, PLACEDORDER, INVOICENO, PAYMETHOD, PAYREF, INVDATE, DISCOUNTDATE, PURCHDATE, DUEDATE FROM EXPENSES WHERE ORDERNO = ?"
+var src models.Expense
+if err := db.GetContext(ctx, &src, hdrSQL, srcOrderNo); err != nil {
+if err == sql.ErrNoRows {
+return nil, fmt.Errorf("order %d not found", srcOrderNo)
+}
+return nil, fmt.Errorf("duplicate order: fetch source: %w", err)
+}
+
+srcLines, err := r.fetchOrderLinesForLifecycle(ctx, db, srcOrderNo, src.Received)
+if err != nil {
+return nil, fmt.Errorf("duplicate order: fetch lines: %w", err)
+}
+
+tx, err := db.BeginTxx(ctx, nil)
+if err != nil {
+return nil, fmt.Errorf("duplicate order: begin tx: %w", err)
+}
+defer tx.Rollback()
+
+var newOrderNo int64
+if err := tx.QueryRowContext(ctx, models.NextIDQuery(models.GenOrders)).Scan(&newOrderNo); err != nil {
+return nil, fmt.Errorf("duplicate order: gen order id: %w", err)
+}
+
+const insHdrSQL = "INSERT INTO EXPENSES (ORDERNO, SUPPLIER, SUPPLIERNO, ORDERDATE, RECEIVED, NETTOTAL, VAT, DISCOUNT, ULLAGES, GRANDTOTAL, CATEGORY, PLACEDORDER) VALUES (?, ?, ?, ?, 'F', 0, 0, 0, 0, 0, 'PURCHASES', 'N')"
+if _, err := tx.ExecContext(ctx, insHdrSQL, newOrderNo, nullStr(src.Supplier), nullStr(src.SupplierNo), time.Now()); err != nil {
+return nil, fmt.Errorf("duplicate order: insert header: %w", err)
+}
+
+const dmSQL = "SELECT MPARTNO, DESCRIPTION, SUPPLIERNO, PACKCOST, EACHCOST, UNITCOST, PACK, UNITS, ONORDER, TAXRATE, COSTGROUP, COSTCATEGORY, PACKUNIT, EACHUNIT, PACKAGING, PURCHASES, WPURCHASES FROM DMASTER WHERE MPARTNO = ?"
+const insLineSQL = "INSERT INTO PITEMS (ORDERNO, ITEMNO, MPARTNO, DESCRIPTION, QTY, PACK, PACKCOST, EACHCOST, SUPPLIER, CATEGORY, COSTGROUP, COSTCATEGORY, ORDERDATE, TAXRATE, DISCOUNT, UNITS, EACHUNIT, PACKUNIT, PACKAGING, POSTED) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'F')"
+
+for _, line := range srcLines {
+var dm models.DmasterItem
+if err := db.GetContext(ctx, &dm, dmSQL, line.MPartNo); err != nil {
+continue // skip lines whose items no longer exist
+}
+var newItemNo int64
+if err := tx.QueryRowContext(ctx, models.NextIDQuery(models.GenOrderItems)).Scan(&newItemNo); err != nil {
+return nil, fmt.Errorf("duplicate order: gen item id: %w", err)
+}
+qty, _ := decimal.NewFromString(line.Qty)
+packCost, _ := decimal.NewFromString(line.PackCost)
+eachCost := decimal.Zero
+if !dm.Pack.IsZero() {
+eachCost = packCost.Div(dm.Pack).RoundBank(4)
+}
+if _, err := tx.ExecContext(ctx, insLineSQL,
+newOrderNo, newItemNo, dm.MPartNo, nullStr(dm.Description),
+qty, dm.Pack, packCost, eachCost,
+nullStr(dm.SupplierNo), "PURCHASES",
+nullStr(dm.CostGroup), nullStr(dm.CostCategory),
+time.Now(), dm.TaxRate,
+dm.Units, nullStr(dm.EachUnit), nullStr(dm.PackUnit), nullStr(dm.Packaging),
+); err != nil {
+return nil, fmt.Errorf("duplicate order: insert line %s: %w", dm.MPartNo, err)
+}
+}
+
+if err := tx.Commit(); err != nil {
+return nil, fmt.Errorf("duplicate order: commit: %w", err)
+}
+
+return r.GetOrder(ctx, newOrderNo)
+}
+
+// ---------------------------------------------------------------------------
+// BulkLoadItems — POST /purchase-orders/{order_no}/bulk-load
+// Adds multiple items to a draft order in a single call.
+// Items not found in DMASTER or with zero pack are silently skipped.
+// ---------------------------------------------------------------------------
+
+func (r *PurchaseOrderRepository) BulkLoadItems(ctx context.Context, orderNo int64, req *models.BulkLoadItemsRequest) (*models.BulkLoadItemsResponse, error) {
+db, err := r.TM.GetDB(ctx)
+if err != nil {
+return nil, fmt.Errorf("bulk load: resolve db: %w", err)
+}
+
+var received string
+if err := db.QueryRowContext(ctx, "SELECT RECEIVED FROM EXPENSES WHERE ORDERNO = ?", orderNo).Scan(&received); err != nil {
+if err == sql.ErrNoRows {
+return nil, fmt.Errorf("order %d not found", orderNo)
+}
+return nil, fmt.Errorf("bulk load: check status: %w", err)
+}
+if received == "T" || received == "t" {
+return nil, fmt.Errorf("order %d is already posted", orderNo)
+}
+
+const dmSQL = "SELECT MPARTNO, DESCRIPTION, SUPPLIERNO, PACKCOST, EACHCOST, UNITCOST, PACK, UNITS, ONORDER, TAXRATE, COSTGROUP, COSTCATEGORY, PACKUNIT, EACHUNIT, PACKAGING, PURCHASES, WPURCHASES FROM DMASTER WHERE MPARTNO = ?"
+const insLineSQL = "INSERT INTO PITEMS (ORDERNO, ITEMNO, MPARTNO, DESCRIPTION, QTY, PACK, PACKCOST, EACHCOST, SUPPLIER, CATEGORY, COSTGROUP, COSTCATEGORY, ORDERDATE, TAXRATE, DISCOUNT, UNITS, EACHUNIT, PACKUNIT, PACKAGING, POSTED) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'F')"
+
+added, skipped := 0, 0
+var addedLines []models.OrderLineDetail
+
+for _, mpartNo := range req.MPartNos {
+var dm models.DmasterItem
+if err := db.GetContext(ctx, &dm, dmSQL, mpartNo); err != nil {
+skipped++
+continue
+}
+if dm.Pack.IsZero() {
+skipped++
+continue
+}
+
+qty := decimal.NewFromInt(1)
+if !dm.OnOrder.IsZero() {
+qty = dm.OnOrder
+}
+packCost := dm.PackCost
+if req.VatInclusive && dm.TaxRate > 0 {
+divisor := decimal.NewFromInt(int64(dm.TaxRate)).Div(decimal.NewFromInt(100)).Add(decimal.NewFromInt(1))
+packCost = packCost.Div(divisor).RoundBank(4)
+}
+eachCost := packCost.Div(dm.Pack).RoundBank(4)
+
+tx, txErr := db.BeginTxx(ctx, nil)
+if txErr != nil {
+skipped++
+continue
+}
+
+var newItemNo int64
+if scanErr := tx.QueryRowContext(ctx, models.NextIDQuery(models.GenOrderItems)).Scan(&newItemNo); scanErr != nil {
+tx.Rollback()
+skipped++
+continue
+}
+
+_, insErr := tx.ExecContext(ctx, insLineSQL,
+orderNo, newItemNo, dm.MPartNo, nullStr(dm.Description),
+qty, dm.Pack, packCost, eachCost,
+nullStr(dm.SupplierNo), "PURCHASES",
+nullStr(dm.CostGroup), nullStr(dm.CostCategory),
+time.Now(), dm.TaxRate,
+dm.Units, nullStr(dm.EachUnit), nullStr(dm.PackUnit), nullStr(dm.Packaging),
+)
+if insErr != nil {
+tx.Rollback()
+skipped++
+continue
+}
+
+if commitErr := tx.Commit(); commitErr != nil {
+skipped++
+continue
+}
+
+p := models.PItem{
+ItemNo:       sql.NullInt64{Int64: newItemNo, Valid: true},
+MPartNo:      sql.NullString{String: dm.MPartNo, Valid: true},
+Description:  dm.Description,
+QTY:          qty,
+Pack:         dm.Pack,
+PackCost:     packCost,
+EachCost:     eachCost,
+CostGroup:    dm.CostGroup,
+CostCategory: dm.CostCategory,
+PackUnit:     dm.PackUnit,
+EachUnit:     dm.EachUnit,
+TaxRate:      sql.NullInt32{Int32: int32(dm.TaxRate), Valid: true},
+Discount:     decimal.Zero,
+Units:        decimal.NewFromInt(dm.Units),
+}
+addedLines = append(addedLines, computeLine(&p))
+added++
+}
+
+return &models.BulkLoadItemsResponse{
+Added:   added,
+Skipped: skipped,
+Lines:   addedLines,
+}, nil
+}
+
+// ---------------------------------------------------------------------------
+// SearchOrderableItems — GET /purchase-orders/search-items?q={}&supplier_no={}&limit={}
+// ---------------------------------------------------------------------------
+
+func (r *PurchaseOrderRepository) SearchOrderableItems(ctx context.Context, q, supplierNo string, limit int) ([]models.SupplierItem, error) {
+db, err := r.TM.GetDB(ctx)
+if err != nil {
+return nil, fmt.Errorf("search orderable: resolve db: %w", err)
+}
+
+const baseQ = "SELECT MPARTNO, DESCRIPTION, SUPPLIERNO, PACKCOST, EACHCOST, UNITCOST, PACK, UNITS, ONORDER, TAXRATE, COSTGROUP, COSTCATEGORY, PACKUNIT, EACHUNIT, PACKAGING, PURCHASES, WPURCHASES FROM DMASTER"
+pattern := "%" + q + "%"
+
+var (
+query string
+args  []interface{}
+)
+if supplierNo != "" {
+query = baseQ + " WHERE SUPPLIERNO = ? AND (MPARTNO LIKE ? OR DESCRIPTION LIKE ?) ORDER BY MPARTNO ROWS 1 TO ?"
+args = []interface{}{supplierNo, pattern, pattern, limit}
+} else {
+query = baseQ + " WHERE MPARTNO LIKE ? OR DESCRIPTION LIKE ? ORDER BY MPARTNO ROWS 1 TO ?"
+args = []interface{}{pattern, pattern, limit}
+}
+
+var rows []models.DmasterItem
+if err := db.SelectContext(ctx, &rows, query, args...); err != nil {
+return nil, fmt.Errorf("search orderable: query: %w", err)
+}
+
+// Pre-fetch supplier name once when a supplier filter is applied.
+sName := ""
+if supplierNo != "" {
+sName = fetchSupplierName(ctx, db, supplierNo)
+}
+
+out := make([]models.SupplierItem, 0, len(rows))
+for _, d := range rows {
+si := dmasterToSupplierItem(&d)
+if supplierNo != "" {
+si.SupplierName = sName
+} else {
+// Per-item lookup only when no supplier filter — expected to be rare/admin-only.
+si.SupplierName = fetchSupplierName(ctx, db, si.SupplierNo)
+}
+out = append(out, si)
+}
+return out, nil
 }

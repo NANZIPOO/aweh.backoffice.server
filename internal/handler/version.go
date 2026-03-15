@@ -73,7 +73,7 @@ func CheckVersionHandler(w http.ResponseWriter, r *http.Request) {
 	updateAvailable := compareVersions(currentVersion, ServerVersion.Version)
 
 	// Build download URL based on platform
-	downloadURL := buildDownloadURL(platform, ServerVersion.Version)
+	downloadURL := buildDownloadURL(r, platform, ServerVersion.Version)
 
 	response := VersionCheckResponse{
 		LatestVersion:   ServerVersion.Version,
@@ -133,12 +133,24 @@ func atoi(s string) int {
 	return result
 }
 
-// buildDownloadURL constructs the download URL based on platform
-func buildDownloadURL(platform, version string) string {
-	// In production, this points to your file server or gateway /downloads endpoint.
+// buildDownloadURL constructs the download URL based on platform.
+// Prefers DOWNLOAD_BASE_URL env; otherwise derives base from the request Host
+// header so the gateway self-hosts downloads on whatever LAN IP it runs on.
+func buildDownloadURL(r *http.Request, platform, version string) string {
 	baseURL := os.Getenv("DOWNLOAD_BASE_URL")
 	if baseURL == "" {
-		baseURL = "http://localhost:8081/downloads"
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		if fwdProto := r.Header.Get("X-Forwarded-Proto"); fwdProto != "" {
+			scheme = fwdProto
+		}
+		host := r.Host
+		if host == "" {
+			host = "localhost:8081"
+		}
+		baseURL = scheme + "://" + host + "/downloads"
 	}
 
 	releaseVersion := strings.TrimPrefix(version, "v")
@@ -146,7 +158,6 @@ func buildDownloadURL(platform, version string) string {
 
 	switch platform {
 	case "windows":
-		// Windows must be distributed as a bundle (exe + DLLs + data folder).
 		return baseURL + "/aweh-backoffice-v" + releaseTag + "-windows.zip"
 	case "android":
 		return baseURL + "/aweh-backoffice-v" + releaseTag + ".apk"

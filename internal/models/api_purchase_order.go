@@ -47,6 +47,16 @@ type UpdateCostsRequest struct {
 	Lines []UpdateCostLine `json:"lines"`
 }
 
+type UpdateOrderHeaderRequest struct {
+	SupplierNo   string `json:"supplier_no"`
+	SupplierName string `json:"supplier_name"`
+}
+
+type BulkLoadItemsRequest struct {
+	MPartNos     []string `json:"mpart_nos"`
+	VatInclusive bool     `json:"vat_inclusive"`
+}
+
 // ---------------------------------------------------------------------------
 // Response bodies (Go → Flutter)
 // ---------------------------------------------------------------------------
@@ -114,9 +124,17 @@ type UpdateCostsResponse struct {
 	SkippedCount int `json:"skipped_count"`
 }
 
+type BulkLoadItemsResponse struct {
+	Added   int               `json:"added"`
+	Skipped int               `json:"skipped"`
+	Lines   []OrderLineDetail `json:"lines"`
+}
+
 type SupplierItem struct {
 	MPartNo      string `json:"mpart_no"`
 	Description  string `json:"description"`
+	SupplierNo   string `json:"supplier_no"`
+	SupplierName string `json:"supplier_name"`
 	PackCost     string `json:"pack_cost"`
 	EachCost     string `json:"each_cost"`
 	Pack         string `json:"pack"`
